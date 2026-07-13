@@ -1,0 +1,36 @@
+[project]
+name = "jlens-lab"
+version = "0.1.0"
+description = "Convergence fitting, architecture layouts, and the controls the Jacobian lens needs to be trusted"
+readme = "README.md"
+license = "Apache-2.0"
+requires-python = ">=3.10"
+authors = [{ name = "Morgan Hough" }]
+keywords = ["interpretability", "jacobian-lens", "global-workspace", "mechanistic-interpretability"]
+dependencies = [
+    "jlens",
+    "torch",
+    "transformers>=5.5",
+    "numpy",
+]
+
+[project.optional-dependencies]
+data = ["datasets"]
+plot = ["matplotlib"]
+dev = ["pytest", "ruff"]
+
+[project.urls]
+Homepage = "https://github.com/m9h/jlens-lab"
+Upstream = "https://github.com/anthropics/jacobian-lens"
+Paper = "https://transformer-circuits.pub/2026/workspace/index.html"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["jlens_lab*"]
+
+[tool.ruff]
+line-length = 88
+target-version = "py310"

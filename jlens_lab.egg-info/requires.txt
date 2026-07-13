@@ -1,0 +1,14 @@
+jlens
+torch
+transformers>=5.5
+numpy
+
+[data]
+datasets
+
+[dev]
+pytest
+ruff
+
+[plot]
+matplotlib
