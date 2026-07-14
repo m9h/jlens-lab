@@ -80,7 +80,29 @@ Falling back to the naive implementation.
 ```
 
 **Install the fused kernels. They are not an optimisation, they are the only way this
-runs.**
+runs.** With them, the same computation on the same GPU:
+
+```
+                         naive        fused
+dim_batch= 8 seq= 64     73.1 GB  ->   9.0 GB     8x
+dim_batch=16 seq=128     OOM      ->   9.5 GB
+dim_batch=32 seq=128     OOM      ->  11.1 GB
+```
+
+From "impossible on any GPU that exists" to "comfortable on a mid-range card."
+
+And the lens works. Nemotron-H-4B (21 Mamba-2 mixers, 4 attention layers), prompt
+*"The capital of France is"*:
+
+```
+L10 top5: ['.\",', '.`', 'Berlin', 'mars', '.\"\n\n']
+L20 top5: ['mars', 'officielle', 'administratives', 'ONU', 'Marte']
+L30 top5: ['Paris', 'France', 'Paris', 'Marseille', 'Louvre']
+```
+
+A coherent semantic cluster at layer 30 -- the capital, the country, another French city,
+a Paris landmark -- in a model that is overwhelmingly **not** a transformer. The J-space is
+not a fact about softmax attention.
 
 > I initially assumed the *opposite* — that the naive path was safer, because fused
 > kernels might not support the backward the Jacobian needs. Wrong on both counts: `jlens`
