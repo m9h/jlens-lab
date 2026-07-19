@@ -3,7 +3,7 @@
 > The workspace is *clearest* in the models `jlens` refuses to load. That is not a
 > coincidence, and it is the most interesting thing we found.
 
-## The models that matter are hybrids
+## Why hybrids matter — and a claim I had to retract
 
 The standing objection to this whole research programme is architectural. Butlin & Long:
 transformers have *"no obviously separable input processors."* Erik Hoel: LLMs *"flatly
@@ -11,10 +11,33 @@ lack"* modularity and reentrant dynamics. The deflationary reading of the J-spac
 it is an artifact of transformer topology — a shared additive residual stream that you
 then rediscover and name after a theory of consciousness.
 
-So look at where the phenomenon actually lives.
+**You cannot test that objection with a library that refuses to load non-transformers.**
+That is the whole reason this chapter exists.
 
-**Qwen3.5-27B** — the model where the flagship ASCII-face readout **emerges** (rank 2 for
-"nose", versus 164 at Qwen3-14B):
+> ### Retraction
+>
+> An earlier version of this page argued something stronger: that the workspace is
+> *clearest* in hybrids, because the flagship ASCII-face readout surfaced at Qwen3.5-27B
+> (rank 2) and not at dense Qwen3-14B (rank 164). **That was wrong, and it was wrong twice
+> over.** The one-prompt ASCII test is not a measurement. Running the robust version — the
+> 102-vignette `association` eval, concepts evoked but never named — gives a smooth
+> monotone rise with scale in which a **dense** 32B (OLMo-3) *beats* the 27B hybrid at
+> every rank:
+>
+> ```
+>  model            J@1     J@10    J@50
+>   14B  dense    0.040    0.091   0.222
+>   27B  hybrid   0.049    0.167   0.343
+>   32B  DENSE    0.062    0.208   0.438   <- best
+> ```
+>
+> So "emerges with scale, sharply" and its correction "emerges with linear attention" are
+> both refuted. Architecture-dependence remains **untested**, not established. Nemotron-H
+> also fails the ASCII test (rank 160) while reading factual prompts fine — see below.
+>
+> The hybrids are still worth supporting. Just not for the reason I first gave.
+
+**Qwen3.5-27B** — a hybrid worth loading because of *what it is*, not what it scored:
 
 ```
 layer_types: {'linear_attention': 48, 'full_attention': 16}   # 64 layers

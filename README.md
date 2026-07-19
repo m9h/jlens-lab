@@ -50,15 +50,18 @@ report.write_csv("convergence.csv")  # diff against Anthropic's published trace
 naming mismatch, not an incompatibility — Nemotron-H calls its embedding `embeddings`
 and its final norm `norm_f`.
 
-It matters because the workspace is **clearest in the models `jlens` cannot load**:
+It matters because the models that would *test* the architectural objection are exactly
+the ones `jlens` cannot load:
 
-- **Qwen3.5-27B** — 48 of 64 layers are *linear attention*; only 16 are softmax. This
-  is where the ASCII-face "nose" readout emerges (rank 2, vs 164 at Qwen3-14B).
+- **Qwen3.5-27B** — 48 of 64 layers are *linear attention*; only 16 are softmax.
 - **Nemotron-H** — 21 Mamba-2 mixers, 17 MLPs, 4 attention layers.
 
-If a J-space appears in these, "global workspace" is not an artifact of softmax
-attention — which is the standing objection to the entire research programme. You
-cannot test that with a library that refuses to load them.
+The standing objection to this research programme is that a "global workspace" is just an
+artifact of transformer topology. **You cannot test that with a library that refuses to
+load non-transformers.** (An earlier version of this README claimed the workspace is
+*clearest* in hybrids. That was based on a single ASCII-art prompt and is retracted — the
+102-prompt `association` eval shows a smooth scale effect in which a dense 32B beats the
+27B hybrid. See `docs/04`.)
 
 ```python
 from jlens_lab import from_hf, describe
