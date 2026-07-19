@@ -73,3 +73,41 @@ def test_fit_converged_rejects_empty_prompts():
     import jlens_lab.fitting as F
     with pytest.raises(ValueError, match="no prompts"):
         F.fit_converged(_BoomModel(), [], source_layers=[0], verbose=False)
+
+
+# --- artifacts: catch a mid-fit checkpoint masquerading as a lens ---------------
+# qwen3-32b's published .pt is a checkpoint at n_done=80 against a config claiming 615.
+# An 80-prompt J is near-identity, so the J-lens degenerates into a logit lens -- and we
+# nearly published an architectural conclusion from it.
+
+def _fake_checkpoint(n_done=80, d=8, layers=(0, 1)):
+    return {"jacobian_sum": {l: torch.eye(d) * n_done for l in layers},
+            "n_done": n_done, "next_idx": n_done, "source_layers": list(layers)}
+
+
+def test_detects_a_checkpoint_is_not_a_lens():
+    from jlens_lab import artifacts
+    assert artifacts._is_checkpoint(_fake_checkpoint())
+    assert not artifacts._is_checkpoint({"jacobians": {}, "n_prompts": 615})
+
+
+def test_recovers_the_running_mean_faithfully():
+    from jlens_lab import artifacts
+    n, d = 80, 8
+    ck = _fake_checkpoint(n_done=n, d=d)
+    lens = artifacts.recover_from_checkpoint(ck)
+    assert lens.n_prompts == n
+    # jacobian_sum was eye(d)*n, so the mean must be exactly eye(d)
+    assert torch.allclose(lens.jacobians[0], torch.eye(d), atol=1e-6)
+
+
+def test_recovery_rejects_an_empty_checkpoint():
+    from jlens_lab import artifacts
+    with pytest.raises(ValueError, match="n_done=0"):
+        artifacts.recover_from_checkpoint(_fake_checkpoint(n_done=0))
+
+
+def test_claimed_prompts_parsed_from_config():
+    from jlens_lab import artifacts
+    assert artifacts._claimed_prompts("results:\n  prompts_fitted: 615\n") == 615
+    assert artifacts._claimed_prompts("no such key") is None

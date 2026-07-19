@@ -13,11 +13,11 @@ contributions"). This does not fork it; it depends on it.
 
 from .fitting import FitReport, fit_converged, wikitext
 from .layouts import LAYOUTS, describe, from_hf, layout_for, register
-from . import controls, geometry
+from . import artifacts, controls, geometry
 
 __all__ = [
     "fit_converged", "FitReport", "wikitext",
     "from_hf", "layout_for", "register", "describe", "LAYOUTS",
-    "controls", "geometry",
+    "artifacts", "controls", "geometry",
 ]
 __version__ = "0.1.0"

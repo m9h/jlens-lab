@@ -24,6 +24,9 @@ Homepage = "https://github.com/m9h/jlens-lab"
 Upstream = "https://github.com/anthropics/jacobian-lens"
 Paper = "https://transformer-circuits.pub/2026/workspace/index.html"
 
+[project.scripts]
+jlens-audit = "jlens_lab.artifacts:_cli"
+
 [build-system]
 requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
