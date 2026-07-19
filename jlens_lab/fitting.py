@@ -98,7 +98,27 @@ def fit_converged(
 
     jac_sum: dict[int, torch.Tensor] | None = None
     n_done, under, trace = 0, 0, []
+    n_skipped, last_error = 0, None
     mrc = float("nan")
+
+    prompts = list(prompts)
+    if not prompts:
+        raise ValueError("no prompts given")
+
+    # PROBE: run the first prompt with NO exception handling, so a real error --
+    # bf16 backward, accelerate device_map dispatch hooks, a bad layer index, a
+    # source layer that includes the target -- surfaces after ONE forward pass
+    # instead of being swallowed by the loop below and reappearing hundreds of
+    # prompts later as an unrelated symptom.
+    #
+    # This is not hypothetical. A bare `except Exception: continue` here hid a
+    # source_layers bug for 600 prompts and surfaced it as "TypeError: 'NoneType'
+    # object is not subscriptable"; a downstream user then lost half a day on a GPU
+    # box to "no prompt produced a Jacobian". Fail fast, loudly, with the real error.
+    jacobian_for_prompt(
+        model, prompts[0], source_layers,
+        dim_batch=dim_batch, max_seq_len=max_seq_len, skip_first=skip_first,
+    )
 
     for prompt in prompts:
         try:
@@ -106,8 +126,13 @@ def fit_converged(
                 model, prompt, source_layers,
                 dim_batch=dim_batch, max_seq_len=max_seq_len, skip_first=skip_first,
             )
-        except Exception:
-            continue  # too short, or unlensable -- skip, as jlens.fit does
+        except Exception as e:
+            # Only legitimate per-prompt skips (too short for skip_first) should land
+            # here -- the probe above has already ruled out config errors. Keep the
+            # error so an all-skipped run can report WHY instead of "produced nothing".
+            n_skipped += 1
+            last_error = e
+            continue
 
         if jac_sum is None:
             jac_sum = {l: torch.zeros_like(per_prompt[l]) for l in source_layers}
@@ -140,7 +165,10 @@ def fit_converged(
             print(f"    {n_done:4d} prompts  mean_rel_change={mrc:.6f}", flush=True)
 
     if jac_sum is None:
-        raise ValueError("no prompt produced a Jacobian; check max_seq_len/skip_first")
+        raise RuntimeError(
+            f"no prompt produced a Jacobian ({n_skipped}/{len(prompts)} skipped). "
+            f"Last error: {type(last_error).__name__}: {last_error}"
+        ) from last_error
 
     converged = under >= stop_window
     if verbose and not converged:

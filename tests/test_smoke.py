@@ -44,3 +44,32 @@ def test_distance_null_preserves_the_decay_profile():
 def test_cka_is_one_against_itself():
     X = torch.randn(256, 32)
     assert geometry.linear_cka(X, X) == pytest.approx(1.0, abs=1e-5)
+
+
+# --- regression: fit_converged must not swallow real errors -------------------
+# A bare `except Exception: continue` in the fit loop hid a source_layers bug for
+# 600 prompts, then cost a downstream user half a day on a GPU box. The probe must
+# surface a real error after ONE prompt.
+
+class _BoomModel:
+    n_layers = 4
+
+def test_fit_converged_raises_immediately_on_a_real_error(monkeypatch):
+    import jlens_lab.fitting as F
+    calls = []
+
+    def boom(model, prompt, layers, **kw):
+        calls.append(prompt)
+        raise RuntimeError("bad layer index")
+
+    monkeypatch.setattr(F, "jacobian_for_prompt", boom)
+    with pytest.raises(RuntimeError, match="bad layer index"):
+        F.fit_converged(_BoomModel(), ["a", "b", "c"], source_layers=[0, 1],
+                        verbose=False)
+    assert len(calls) == 1, "must fail on the FIRST prompt, not churn the whole list"
+
+
+def test_fit_converged_rejects_empty_prompts():
+    import jlens_lab.fitting as F
+    with pytest.raises(ValueError, match="no prompts"):
+        F.fit_converged(_BoomModel(), [], source_layers=[0], verbose=False)
