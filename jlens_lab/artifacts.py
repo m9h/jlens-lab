@@ -199,3 +199,70 @@ def _cli() -> int:
     import sys
     reports = audit(sys.argv[1:] or None)
     return 1 if any(not r.ok for r in reports) else 0
+
+
+# --------------------------------------------------------------------------------
+# Validation anchor
+# --------------------------------------------------------------------------------
+
+def compare(mine, theirs) -> dict:
+    """Per-layer agreement between two lenses: relative Frobenius error and cosine.
+
+    Use before trusting a batch of lenses you fit yourself. Fit ONE model that already
+    has a published lens, compare, and only then fit the rest. A silent fitting bug --
+    a wrong RoPE implementation, a bf16 backward, an off-by-one in source_layers --
+    produces a lens that looks entirely reasonable in isolation and is wrong.
+    """
+    import torch
+
+    shared = sorted(set(mine.jacobians) & set(theirs.jacobians))
+    if not shared:
+        raise ValueError("no layers in common; check source_layers")
+    per_layer = []
+    for l in shared:
+        a = mine.jacobians[l].float()
+        b = theirs.jacobians[l].float().to(a.device)
+        per_layer.append({
+            "layer": l,
+            "rel_error": ((a - b).norm() / b.norm()).item(),
+            "cosine": torch.nn.functional.cosine_similarity(
+                a.flatten(), b.flatten(), dim=0).item(),
+        })
+    cos = [r["cosine"] for r in per_layer]
+    return {
+        "n_layers": len(shared),
+        "mean_cosine": sum(cos) / len(cos),
+        "min_cosine": min(cos),
+        "mean_rel_error": sum(r["rel_error"] for r in per_layer) / len(per_layer),
+        "per_layer": per_layer,
+    }
+
+
+def validate_fit(mine, np_id: str, *, threshold: float = 0.95,
+                 repo: str = REPO, subdir: str = SUBDIR) -> dict:
+    """Gate your fitting pipeline against a PUBLISHED lens for the same model.
+
+        from jlens_lab import fit_converged, artifacts
+        lens, report = fit_converged(model, wikitext(tok, 1000))
+        assert report.converged
+        gate = artifacts.validate_fit(lens, "olmo-3-1025-7b")
+        assert gate["pass"], gate            # only now fit the other eleven
+
+    Returns the comparison plus ``pass``. Below ``threshold`` mean cosine, your pipeline
+    disagrees with the reference and every lens you fit with it is suspect.
+    """
+    from huggingface_hub import HfApi, hf_hub_download
+
+    files = [f for f in HfApi().list_repo_files(repo) if f.startswith(np_id + "/")]
+    pts = [f for f in files if f.endswith(".pt")]
+    if not pts:
+        raise FileNotFoundError(f"no published .pt for {np_id}")
+    theirs = load_lens(hf_hub_download(repo, pts[0]))
+
+    out = compare(mine, theirs)
+    out["np_id"] = np_id
+    out["their_n_prompts"] = theirs.n_prompts
+    out["our_n_prompts"] = mine.n_prompts
+    out["threshold"] = threshold
+    out["pass"] = out["mean_cosine"] >= threshold
+    return out

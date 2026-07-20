@@ -111,3 +111,36 @@ def test_claimed_prompts_parsed_from_config():
     from jlens_lab import artifacts
     assert artifacts._claimed_prompts("results:\n  prompts_fitted: 615\n") == 615
     assert artifacts._claimed_prompts("no such key") is None
+
+
+# --- validation anchor ---------------------------------------------------------
+# Fit one model that already has a published lens, compare, and only then fit the
+# rest. A silent fitting bug (wrong RoPE, bf16 backward, off-by-one source_layers)
+# yields a lens that looks fine in isolation and is wrong.
+
+class _L:
+    def __init__(self, jac, n=616):
+        self.jacobians, self.n_prompts = jac, n
+        self.d_model = next(iter(jac.values())).shape[-1]
+
+
+def test_compare_is_perfect_against_itself():
+    from jlens_lab import artifacts
+    j = {0: torch.randn(8, 8), 1: torch.randn(8, 8)}
+    r = artifacts.compare(_L(j), _L(j))
+    assert r["mean_cosine"] == pytest.approx(1.0, abs=1e-5)
+    assert r["mean_rel_error"] == pytest.approx(0.0, abs=1e-5)
+
+
+def test_compare_flags_a_divergent_fit():
+    from jlens_lab import artifacts
+    a = {0: torch.randn(8, 8), 1: torch.randn(8, 8)}
+    b = {0: torch.randn(8, 8), 1: torch.randn(8, 8)}   # independent -> ~0 cosine
+    r = artifacts.compare(_L(a), _L(b))
+    assert abs(r["mean_cosine"]) < 0.5, "independent lenses must not look similar"
+
+
+def test_compare_requires_shared_layers():
+    from jlens_lab import artifacts
+    with pytest.raises(ValueError, match="no layers in common"):
+        artifacts.compare(_L({0: torch.randn(4, 4)}), _L({7: torch.randn(4, 4)}))
