@@ -81,6 +81,9 @@ def fit_converged(
     max_seq_len: int = MAX_SEQ_LEN,
     dim_batch: int = DIM_BATCH,
     skip_first: int = SKIP_FIRST,
+    checkpoint_path: str | pathlib.Path | None = None,
+    checkpoint_every: int = 25,
+    resume: bool = True,
     verbose: bool = True,
 ) -> tuple[JacobianLens, FitReport]:
     """Fit a Jacobian lens until it stops moving, not until the prompts run out.
@@ -105,6 +108,18 @@ def fit_converged(
     if not prompts:
         raise ValueError("no prompts given")
 
+    # Checkpoint the running sum. jlens.fit takes a checkpoint_path and this wrapper
+    # dropped it -- a 20-hour 7B fit then lives only in GPU memory, and a dead pod loses
+    # all of it. Same class of mistake as a cloud function timing out with nothing saved.
+    ckpt = pathlib.Path(checkpoint_path) if checkpoint_path else None
+    start_idx = 0
+    if ckpt is not None and resume and ckpt.exists():
+        st = torch.load(ckpt, map_location="cpu", weights_only=False)
+        jac_sum = {int(k): v for k, v in st["jacobian_sum"].items()}
+        n_done, trace, start_idx = st["n_done"], st.get("trace", []), st["next_idx"]
+        if verbose:
+            print(f"  resuming from {ckpt}: {n_done} prompts already done", flush=True)
+
     # PROBE: run the first prompt with NO exception handling, so a real error --
     # bf16 backward, accelerate device_map dispatch hooks, a bad layer index, a
     # source layer that includes the target -- surfaces after ONE forward pass
@@ -120,7 +135,9 @@ def fit_converged(
         dim_batch=dim_batch, max_seq_len=max_seq_len, skip_first=skip_first,
     )
 
-    for prompt in prompts:
+    for prompt_idx, prompt in enumerate(prompts):
+        if prompt_idx < start_idx:
+            continue
         try:
             per_prompt, seq_len, n_valid = jacobian_for_prompt(
                 model, prompt, source_layers,
@@ -163,6 +180,12 @@ def fit_converged(
 
         if verbose and n_done % 50 == 0:
             print(f"    {n_done:4d} prompts  mean_rel_change={mrc:.6f}", flush=True)
+
+        if ckpt is not None and n_done % checkpoint_every == 0:
+            tmp = ckpt.with_suffix(ckpt.suffix + ".tmp")     # atomic: never a torn file
+            torch.save({"jacobian_sum": jac_sum, "n_done": n_done,
+                        "trace": trace, "next_idx": prompt_idx + 1}, tmp)
+            tmp.replace(ckpt)
 
     if jac_sum is None:
         raise RuntimeError(

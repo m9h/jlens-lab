@@ -190,3 +190,31 @@ def test_variance_fraction_is_small_for_a_thin_random_basis():
     thin = torch.linalg.qr(torch.randn(d, k))[0][:, :k]
     f = capacity.variance_fraction(acts, thin)
     assert 0.02 < f < 0.15, f"isotropic acts: expect ~k/d={k/d:.3f}, got {f:.3f}"
+
+
+def test_fit_converged_checkpoints_and_resumes(tmp_path, monkeypatch):
+    """A 20-hour 7B fit must not live only in GPU memory. jlens.fit has checkpoint_path;
+    this wrapper dropped it, so a dead pod lost everything."""
+    import jlens_lab.fitting as F
+    d, calls = 4, {"n": 0}
+
+    def fake(model, prompt, layers, **kw):
+        calls["n"] += 1
+        return {l: torch.eye(d) for l in layers}, 128, 100
+
+    monkeypatch.setattr(F, "jacobian_for_prompt", fake)
+    ck = tmp_path / "ck.pt"
+
+    class M: n_layers = 2
+    F.fit_converged(M(), [f"p{i}" for i in range(60)], source_layers=[0, 1],
+                    checkpoint_path=ck, checkpoint_every=10,
+                    min_prompts=1000, verbose=False)
+    assert ck.exists(), "must write a checkpoint"
+
+    st = torch.load(ck, map_location="cpu", weights_only=False)
+    assert st["n_done"] >= 50 and "jacobian_sum" in st
+
+    before = calls["n"]
+    F.fit_converged(M(), [f"p{i}" for i in range(60)], source_layers=[0, 1],
+                    checkpoint_path=ck, min_prompts=1000, verbose=False)
+    assert calls["n"] - before < 30, "resume must skip already-processed prompts"
