@@ -164,3 +164,29 @@ def test_cosine_alone_cannot_gate_an_underfit_lens():
     underfit = base + 0.05 * torch.randn(d, d)     # same structure, different fit
     r = artifacts.compare(_L({0: base}), _L({0: underfit}))
     assert r["mean_cosine"] > 0.95, "structure alone already clears a 0.95 bar"
+
+
+def test_random_share_is_the_null_for_a_capacity_claim():
+    from jlens_lab import capacity
+    assert capacity.random_share(256, 4096) == pytest.approx(0.0625)
+    r = capacity.capacity_report(0.08, k=256, d_model=4096)
+    assert r["under_paper_10pct"], "8% is under the paper's 10% ceiling"
+    assert r["excess_ratio"] == pytest.approx(1.28, abs=0.01), \
+        "but it is only 1.28x a random subspace of the same size -- barely a bottleneck"
+
+
+def test_variance_fraction_is_one_for_a_full_basis():
+    from jlens_lab import capacity
+    d = 16
+    acts = torch.randn(64, d)
+    full = torch.linalg.qr(torch.randn(d, d))[0]
+    assert capacity.variance_fraction(acts, full) == pytest.approx(1.0, abs=1e-4)
+
+
+def test_variance_fraction_is_small_for_a_thin_random_basis():
+    from jlens_lab import capacity
+    d, k = 64, 4
+    acts = torch.randn(512, d)
+    thin = torch.linalg.qr(torch.randn(d, k))[0][:, :k]
+    f = capacity.variance_fraction(acts, thin)
+    assert 0.02 < f < 0.15, f"isotropic acts: expect ~k/d={k/d:.3f}, got {f:.3f}"
