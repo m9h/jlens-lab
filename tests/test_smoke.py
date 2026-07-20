@@ -144,3 +144,23 @@ def test_compare_requires_shared_layers():
     from jlens_lab import artifacts
     with pytest.raises(ValueError, match="no layers in common"):
         artifacts.compare(_L({0: torch.randn(4, 4)}), _L({7: torch.randn(4, 4)}))
+
+
+def test_identity_distance_is_zero_for_identity_and_grows():
+    from jlens_lab import artifacts
+    d = 16
+    assert artifacts.identity_distance(_L({0: torch.eye(d)})) == pytest.approx(0.0, abs=1e-6)
+    far = artifacts.identity_distance(_L({0: torch.eye(d) * 3.0}))
+    assert far > 1.0, "a scaled identity must register as far from I"
+
+
+def test_cosine_alone_cannot_gate_an_underfit_lens():
+    """Measured on real lenses: a 100-prompt fit scores 0.956-0.972 against a converged
+    reference. Any cosine threshold admitting a correct fit also admits a 4.7x under-fit
+    one -- which is why validate_fit also gates on identity_distance."""
+    from jlens_lab import artifacts
+    d = 32
+    base = torch.eye(d) + 0.05 * torch.randn(d, d)
+    underfit = base + 0.05 * torch.randn(d, d)     # same structure, different fit
+    r = artifacts.compare(_L({0: base}), _L({0: underfit}))
+    assert r["mean_cosine"] > 0.95, "structure alone already clears a 0.95 bar"

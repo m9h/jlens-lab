@@ -238,8 +238,48 @@ def compare(mine, theirs) -> dict:
     }
 
 
+def identity_distance(lens) -> float:
+    """Mean over layers of ||J_l - I||_F / ||I||_F.
+
+    Anthropic's published ``convergence.csv`` records exactly this per prompt, and
+    ``config.yaml`` records its final value. It is a far sharper validation target than
+    cosine: it is a specific scalar your fit must land on, and it is sensitive to the
+    STRUCTURE of J rather than to the large-scale similarity every lens of a given model
+    shares. A wrong RoPE, a bf16 backward, an off-by-one in source_layers all move it.
+    """
+    import torch
+
+    vals = []
+    for J in lens.jacobians.values():
+        J = J.float()
+        I = torch.eye(J.shape[-1], device=J.device, dtype=J.dtype)
+        vals.append(((J - I).norm() / I.norm()).item())
+    return sum(vals) / len(vals)
+
+
+def published_targets(np_id: str, *, repo: str = REPO, subdir: str = SUBDIR) -> dict:
+    """The scalars a correct fit must reproduce, from the published config.yaml."""
+    import pathlib as _p
+    import re
+    from huggingface_hub import HfApi, hf_hub_download
+
+    files = [f for f in HfApi().list_repo_files(repo) if f.startswith(np_id + "/")]
+    cfgs = [f for f in files if f.endswith("config.yaml")]
+    if not cfgs:
+        return {}
+    text = _p.Path(hf_hub_download(repo, cfgs[0])).read_text()
+    out = {}
+    for key, cast in (("prompts_fitted", int),
+                      ("final_identity_distance", float),
+                      ("final_mean_rel_change", float)):
+        m = re.search(rf"{key}:\s*([\d.]+)", text)
+        if m:
+            out[key] = cast(m.group(1))
+    return out
+
+
 def validate_fit(mine, np_id: str, *, threshold: float = 0.95,
-                 repo: str = REPO, subdir: str = SUBDIR) -> dict:
+                 id_tol: float = 0.05, repo: str = REPO, subdir: str = SUBDIR) -> dict:
     """Gate your fitting pipeline against a PUBLISHED lens for the same model.
 
         from jlens_lab import fit_converged, artifacts
@@ -264,5 +304,29 @@ def validate_fit(mine, np_id: str, *, threshold: float = 0.95,
     out["their_n_prompts"] = theirs.n_prompts
     out["our_n_prompts"] = mine.n_prompts
     out["threshold"] = threshold
-    out["pass"] = out["mean_cosine"] >= threshold
+
+    # Cosine ALONE is not a gate. Measured: a lens fit on 100 prompts -- under-fit by
+    # ~4.7x -- still scores 0.956-0.972 mean cosine against the converged reference
+    # (qwen3 1.7B/4B/8B). Any threshold loose enough to admit a correct fit also admits
+    # a badly under-fit one, because J is dominated by structure every lens of a model
+    # shares. So gate on identity_distance too: a specific scalar, published per model.
+    tgt = published_targets(np_id, repo=repo, subdir=subdir)
+    ours_id = identity_distance(mine)
+    out["identity_distance_ours"] = ours_id
+    out["identity_distance_published"] = tgt.get("final_identity_distance")
+    out["published_prompts_fitted"] = tgt.get("prompts_fitted")
+
+    checks = {"cosine": out["mean_cosine"] >= threshold}
+    if out["identity_distance_published"] is not None:
+        rel = abs(ours_id - out["identity_distance_published"]) / max(
+            out["identity_distance_published"], 1e-9)
+        out["identity_distance_rel_error"] = rel
+        checks["identity_distance"] = rel <= id_tol
+    else:
+        out["identity_distance_rel_error"] = None
+
+    out["checks"] = checks
+    out["pass"] = all(checks.values())
+    if not out["pass"]:
+        out["failed"] = [k for k, v in checks.items() if not v]
     return out
