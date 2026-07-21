@@ -218,3 +218,19 @@ def test_fit_converged_checkpoints_and_resumes(tmp_path, monkeypatch):
     F.fit_converged(M(), [f"p{i}" for i in range(60)], source_layers=[0, 1],
                     checkpoint_path=ck, min_prompts=1000, verbose=False)
     assert calls["n"] - before < 30, "resume must skip already-processed prompts"
+
+
+def test_workspace_ratio_divides_out_embedding_norm():
+    """The whole point: a token with a huge embedding norm must NOT dominate the ratio,
+    because norm cancels between workspace and motor. Motor J = c*I makes the ratio depend
+    only on the workspace transport, not on ||W_U[t]||."""
+    from jlens_lab import workspace_content as wc
+    d, V = 8, 50
+    W_U = torch.randn(V, d)
+    W_U[0] *= 100.0                       # an embedding-norm outlier
+    class L:
+        jacobians = {5: torch.randn(d, d), 9: torch.eye(d) * 2.0}   # motor ~ scaled I
+    r = wc.workspace_vs_output(L(), W_U, workspace_layer=5, motor_layer=9)
+    # token 0's ratio must be within the bulk, not an extreme outlier
+    z = (r[0] - r.mean()) / r.std()
+    assert abs(z) < 3, f"embedding-norm outlier leaked into the ratio (z={z:.1f})"
