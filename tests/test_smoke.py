@@ -234,3 +234,61 @@ def test_workspace_ratio_divides_out_embedding_norm():
     # token 0's ratio must be within the bulk, not an extreme outlier
     z = (r[0] - r.mean()) / r.std()
     assert abs(z) < 3, f"embedding-norm outlier leaked into the ratio (z={z:.1f})"
+
+
+def test_marker_enrichment_detects_planted_signal_and_respects_null():
+    """If discourse markers are given the highest ratios, enrichment must be significant;
+    if the ratio is random, it must NOT be (guards against a measure that always fires)."""
+    from jlens_lab import workspace_content as wc
+
+    # non-marker fillers must be ALPHABETIC and >4 chars, or word_tokens drops them
+    fillers = ["alpha", "gamma", "delta", "sigma", "kappa", "theta", "omega",
+               "banana", "cherry", "planet", "rocket", "purple", "yellow", "silver",
+               "castle", "meadow", "forest", "canyon", "harbor", "bridge", "tunnel",
+               "copper", "marble", "velvet", "cactus", "walnut", "cotton", "pepper",
+               "ginger", "almond", "cashew", "pecans"]
+
+    class Tok:
+        def __init__(self):
+            self._t = ["Ġ" + w for w in list(wc.DISCOURSE_MARKERS)[:8]] + \
+                      ["Ġ" + w for w in fillers]
+        @property
+        def vocab_size(self): return len(self._t)
+        def convert_ids_to_tokens(self, ids): return [self._t[ids[0]]]
+
+    tok = Tok(); n = tok.vocab_size
+    # planted: the 8 markers (ids 0..7) get the highest ratios
+    planted = torch.zeros(n); planted[:8] = 10.0; planted[8:] = torch.rand(n - 8)
+    r = wc.marker_enrichment(planted, tok, top_frac=0.25, n_perm=500)
+    assert r["p_value"] < 0.05 and r["enrichment"] > 1.5, "planted signal must be significant"
+
+    # random: no enrichment
+    rand = torch.rand(n)
+    r2 = wc.marker_enrichment(rand, tok, top_frac=0.25, n_perm=500)
+    assert r2["p_value"] > 0.05 or r2["enrichment"] < 2.0, "random ratio must not fire"
+
+
+# --- attribution: offline (mock the HTTP layer) --------------------------------
+def test_attribution_count_parses_api(monkeypatch):
+    from jlens_lab import attribution
+    monkeypatch.setattr(attribution, "_post", lambda payload, **kw: {"count": 4213})
+    assert attribution.count("disgusting") == 4213
+
+
+def test_register_provenance_compares_sets(monkeypatch):
+    from jlens_lab import attribution
+    fake = {"disgusting": 5000, "fucks": 3000, "instead": 90000,
+            "table": 80000, "water": 120000, "house": 100000}
+    monkeypatch.setattr(attribution, "count",
+                        lambda t, **kw: fake.get(t, 0))
+    out = attribution.register_provenance(
+        ["disgusting", "fucks", "instead"], ["table", "water", "house"])
+    assert out["workspace_median"] == 5000                 # median of [3000,5000,90000]
+    assert out["control_median"] == 100000                 # median of [80000,100000,120000]
+    assert out["n_workspace_absent"] == 0
+
+
+def test_documents_empty_when_no_match(monkeypatch):
+    from jlens_lab import attribution
+    monkeypatch.setattr(attribution, "find", lambda q, **kw: {"cnt": 0})
+    assert attribution.documents("zzznotarealtoken") == []

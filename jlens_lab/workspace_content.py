@@ -52,3 +52,70 @@ def word_tokens(tokenizer, min_len: int = 4):
         if t.startswith("Ġ") and t[1:].isalpha() and len(t) > min_len:
             out.append(i)
     return out
+
+
+# --------------------------------------------------------------------------------
+# Phase 0: is the discourse-marker enrichment real, or hand-picked-layer noise?
+# --------------------------------------------------------------------------------
+
+# Discourse / contrastive / reflexive markers -- the category the workspace appeared to
+# hold in the n=1 probe. A CLOSED list fixed in advance, so the enrichment test is not
+# post-hoc: we ask whether THIS predefined set is over-represented at the top of the
+# ratio, not whether the top happens to look thematic.
+DISCOURSE_MARKERS = {
+    "instead", "again", "either", "neither", "similarly", "anyway", "anyways",
+    "however", "therefore", "nevertheless", "nonetheless", "meanwhile", "otherwise",
+    "moreover", "furthermore", "conversely", "regardless", "whereas", "though",
+    "although", "unless", "besides", "rather", "than", "themselves", "herself",
+    "himself", "itself", "oneself", "yourself", "myself", "ourselves",
+}
+
+
+def band_ratio(lens, W_U, *, workspace_layers, motor_layers):
+    """Average workspace/output ratio over BANDS of layers, not two hand-picked ones.
+
+    Numerator: mean over workspace-band layers of || J_l^T W_U[t] ||.
+    Denominator: mean over motor-band layers (J -> I there, so ~ output expression).
+    Embedding norm cancels. Returns a per-token tensor.
+    """
+    W_U = W_U.float()
+    num = torch.stack([(W_U @ lens.jacobians[l].float().T).norm(dim=1)
+                       for l in workspace_layers]).mean(0)
+    den = torch.stack([(W_U @ lens.jacobians[l].float().T).norm(dim=1)
+                       for l in motor_layers]).mean(0).clamp_min(1e-6)
+    return num / den
+
+
+def marker_enrichment(ratio, tokenizer, *, top_frac=0.05, n_perm=1000, seed=0,
+                      markers=DISCOURSE_MARKERS):
+    """Are discourse markers over-represented in the top ``top_frac`` of the ratio?
+
+    Restricts to real word-pieces, ranks by the ratio, counts how many predefined markers
+    land in the top fraction, and compares against a permutation null that shuffles the
+    ratio<->token assignment. The marker set is compared only to OTHER word tokens (not
+    specials/fragments), so casing/length distribution is held roughly constant.
+
+    Returns observed count, null mean/std, enrichment ratio, and an empirical p-value.
+    """
+    ids = word_tokens(tokenizer)
+    if not ids:
+        return {"n_word_tokens": 0}
+    toks = [tokenizer.convert_ids_to_tokens([i])[0].lstrip("Ġ").lower() for i in ids]
+    r = ratio[torch.tensor(ids)]
+    is_marker = torch.tensor([t in markers for t in toks])
+    n_markers = int(is_marker.sum())
+    if n_markers == 0:
+        return {"n_word_tokens": len(ids), "n_markers": 0}
+
+    k = max(1, int(top_frac * len(ids)))
+    observed = int(is_marker[r.topk(k).indices].sum())
+
+    g = torch.Generator().manual_seed(seed)
+    null = torch.empty(n_perm)
+    for i in range(n_perm):
+        null[i] = is_marker[torch.randperm(len(ids), generator=g)[:k]].sum()
+    return {"n_word_tokens": len(ids), "n_markers": n_markers, "top_k": k,
+            "observed_in_top": observed, "null_mean": float(null.mean()),
+            "null_std": float(null.std()),
+            "enrichment": observed / max(null.mean().item(), 1e-9),
+            "p_value": float((null >= observed).float().mean())}
