@@ -239,22 +239,27 @@ def compare(mine, theirs) -> dict:
 
 
 def identity_distance(lens) -> float:
-    """Mean over layers of ||J_l - I||_F / ||I||_F.
+    """``||J_L - I||_F / ||I||_F`` at the LAST source layer ``L`` (adjacent to target).
 
-    Anthropic's published ``convergence.csv`` records exactly this per prompt, and
-    ``config.yaml`` records its final value. It is a far sharper validation target than
-    cosine: it is a specific scalar your fit must land on, and it is sensitive to the
-    STRUCTURE of J rather than to the large-scale similarity every lens of a given model
-    shares. A wrong RoPE, a bf16 backward, an off-by-one in source_layers all move it.
+    This is the exact scalar Anthropic's published ``convergence.csv`` records per prompt
+    and ``config.yaml`` reports as ``final_identity_distance`` -- verified to 6 digits
+    against olmo-3-1025-7b (published 0.220851; ``||J_30 - I||`` = 0.220850). It is NOT a
+    mean over layers: the per-layer value runs ~1.16 at layer 0 down to ~0.22 at the last
+    layer, so a mean (~0.77 here) is a different quantity and does not match the published
+    number -- an earlier version of this function averaged and silently failed every
+    anchor gate, because the published lens did not even validate against itself.
+
+    It is a far sharper validation target than cosine: a specific scalar your fit must
+    land on, sensitive to the STRUCTURE of J at the layer that feeds the readout rather
+    than to the large-scale similarity every lens of a given model shares. A wrong RoPE,
+    a bf16 backward, an off-by-one in source_layers all move it.
     """
     import torch
 
-    vals = []
-    for J in lens.jacobians.values():
-        J = J.float()
-        I = torch.eye(J.shape[-1], device=J.device, dtype=J.dtype)
-        vals.append(((J - I).norm() / I.norm()).item())
-    return sum(vals) / len(vals)
+    layer = max(lens.jacobians)          # last source layer = the one adjacent to target
+    J = lens.jacobians[layer].float()
+    I = torch.eye(J.shape[-1], device=J.device, dtype=J.dtype)
+    return ((J - I).norm() / I.norm()).item()
 
 
 def published_targets(np_id: str, *, repo: str = REPO, subdir: str = SUBDIR) -> dict:
