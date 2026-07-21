@@ -34,16 +34,35 @@ API_URL = "https://api.infini-gram.io/"
 DEFAULT_INDEX = "v4_dolma-v1_7_llama"
 
 
-def _post(payload: dict, *, timeout: float = 30.0, url: str = API_URL) -> dict:
+def _post(payload: dict, *, timeout: float = 30.0, url: str = API_URL,
+          retries: int = 4, backoff: float = 1.5) -> dict:
+    """POST to the infini-gram API with backoff on 403/429/5xx.
+
+    The free tier rate-limits: a burst of a few hundred rapid calls returns HTTP 403.
+    Bulk callers (source_distribution over many tokens) MUST pace themselves -- this
+    retries with exponential backoff, but for large sweeps also pass a per-call ``pause``
+    or self-host the index.
+    """
+    import time
     req = urllib.request.Request(
         url, data=json.dumps(payload).encode(),
         headers={"Content-Type": "application/json"},
     )
-    with urllib.request.urlopen(req, timeout=timeout) as r:
-        out = json.loads(r.read())
-    if isinstance(out, dict) and out.get("error"):
-        raise RuntimeError(f"infini-gram error: {out['error']}")
-    return out
+    last = None
+    for attempt in range(retries):
+        try:
+            with urllib.request.urlopen(req, timeout=timeout) as r:
+                out = json.loads(r.read())
+            if isinstance(out, dict) and out.get("error"):
+                raise RuntimeError(f"infini-gram error: {out['error']}")
+            return out
+        except urllib.error.HTTPError as e:
+            last = e
+            if e.code in (403, 429, 500, 502, 503) and attempt < retries - 1:
+                time.sleep(backoff ** (attempt + 1))   # 1.5, 2.25, 3.4, ... seconds
+                continue
+            raise
+    raise last
 
 
 def count(query: str, *, index: str = DEFAULT_INDEX, **kw) -> int:
@@ -67,28 +86,67 @@ def find(query: str, *, index: str = DEFAULT_INDEX, **kw) -> dict:
     return _post({"index": index, "query_type": "find", "query": query}, **kw)
 
 
-def documents(query: str, *, index: str = DEFAULT_INDEX, max_docs: int = 5, **kw) -> list:
+def documents(query: str, *, index: str = DEFAULT_INDEX, max_docs: int = 5,
+              max_disp_len: int = 200, **kw) -> list:
     """Actual training documents containing ``query``, with the matched span.
 
-    Uses ``find`` to get the match count/pointers, then ``get_doc_by_rank`` to pull real
-    documents. Returns up to ``max_docs`` dicts (the API's document payloads). The point is
-    to *read* the contexts a workspace-held token came from and judge whether they form a
-    coherent register.
+    ``find`` returns ``segment_by_shard`` -- a [start, end) rank range per shard.
+    ``get_doc_by_rank`` must be told which shard ``s`` and a rank WITHIN that shard's
+    segment (a global rank 500s a shard that does not hold it). We walk the non-empty
+    shards and pull the first ``max_docs`` documents so their contexts can be read and
+    judged for register coherence.
     """
     f = find(query, index=index, **kw)
-    cnt = int(f.get("cnt", f.get("count", 0)))
-    if cnt == 0:
+    if int(f.get("cnt", f.get("count", 0))) == 0:
         return []
     docs = []
-    for rank in range(min(max_docs, cnt)):
-        try:
-            d = _post({"index": index, "query_type": "get_doc_by_rank",
-                       "query": query, "rank": rank,
-                       "max_disp_len": kw.get("max_disp_len", 200)}, **kw)
-            docs.append(d)
-        except Exception:
+    for s, seg in enumerate(f.get("segment_by_shard", [])):
+        if not seg or seg[1] <= seg[0]:
+            continue
+        for rank in range(seg[0], min(seg[1], seg[0] + max_docs - len(docs))):
+            try:
+                docs.append(_post({"index": index, "query_type": "get_doc_by_rank",
+                                   "query": query, "s": s, "rank": rank,
+                                   "max_disp_len": max_disp_len}, **kw))
+            except Exception:
+                break
+        if len(docs) >= max_docs:
             break
     return docs
+
+
+def _source_of(doc: dict) -> str:
+    """Dolma source subset for a document, from its metadata.path prefix.
+
+    e.g. 'cc_en_tail/cc_en_tail-0164.json.gz' -> 'cc_en_tail' (Common Crawl low-quality
+    tail); 'wiki/...' -> 'wiki'; 'books/...' -> 'books'. This is the field that turns
+    attribution into a REGISTER test: web-tail / forum sources vs curated (wiki/books/
+    papers).
+    """
+    meta = doc.get("metadata", {})
+    path = meta.get("path", "") if isinstance(meta, dict) else ""
+    return path.split("/")[0] if path else "unknown"
+
+
+def source_distribution(tokens, *, n_docs: int = 10, index: str = DEFAULT_INDEX,
+                        **kw) -> dict:
+    """Tally which Dolma sources a set of tokens' occurrences come from.
+
+    For each token, sample up to ``n_docs`` documents and record their source subset.
+    Returns {source: fraction} aggregated over all tokens. The register hypothesis
+    predicts workspace-held tokens draw disproportionately from web-tail / social sources
+    vs curated ones, relative to a neutral control set.
+    """
+    import time
+    from collections import Counter
+    pause = kw.pop("pause", 0.3)          # space calls; the free tier 403s on bursts
+    c = Counter()
+    for t in tokens:
+        for d in documents(t, index=index, max_docs=n_docs, max_disp_len=1, **kw):
+            c[_source_of(d)] += 1
+            time.sleep(pause)
+    total = sum(c.values())
+    return {s: n / total for s, n in c.most_common()} if total else {}
 
 
 def register_provenance(workspace_tokens, control_tokens, *, index: str = DEFAULT_INDEX,
