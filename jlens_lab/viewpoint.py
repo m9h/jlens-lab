@@ -13,9 +13,26 @@ s_1..s_d of dJ, the participation-ratio effective rank is
   r_eff small (few directions carry the change)  -> STRUCTURED
   r_eff ~ d  (change spread over all directions) -> DIFFUSE weight drift
 
-This needs only the two lens files -- no model, no GPU. The honest comparison is against
-the same statistic computed between two REFITS of one model (fitting noise): a structured
-viewpoint shift must be markedly lower-rank than that null.
+This needs only the two lens files -- no model, no GPU.
+
+TWO NULLS ARE REQUIRED, and the second already bites:
+
+1. Refit noise -- the same statistic between two REFITS of one model. Not yet run (needs
+   one GPU fit, ~$3). A structured shift must be markedly lower-rank than this.
+
+2. J itself. dJ being low-rank means little if J is ALREADY low-rank. Measured on three
+   published base/instruct pairs, it largely is:
+
+       model          rank(J_base)   rank(dJ)   ratio
+       gemma-3-270m       0.048       0.022     0.45x
+       gemma-3-1b         0.019       0.019     0.98x   <- dJ == J rank
+       gemma-2-2b         0.119       0.003     0.02x   <- only here concentrated
+
+   So for 2 of 3, dJ's low rank is INHERITED from J being low-rank, not evidence that
+   post-training is a structured, low-dimensional shift. The raw dJ effective rank
+   (0.003-0.02) must NOT be reported on its own -- it looked like a strong Claim 6
+   confirmation and mostly is not. Report dJ rank relative to J rank, and against the
+   refit-noise null.
 """
 
 from __future__ import annotations
