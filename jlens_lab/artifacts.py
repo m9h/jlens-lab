@@ -220,8 +220,12 @@ def compare(mine, theirs) -> dict:
         raise ValueError("no layers in common; check source_layers")
     per_layer = []
     for l in shared:
-        a = mine.jacobians[l].float()
-        b = theirs.jacobians[l].float().to(a.device)
+        # float64, deliberately. These are 4096^2 ~ 16.7M-element identity-dominated
+        # vectors; float32 cosine_similarity overshoots by up to +0.006 and returned 1.0059
+        # for two lenses whose true cosine is 1.0000 (OLMo-3 base, layer 30, 2026-10-08).
+        # Any deep-layer "cos 1.000" from the float32 path should be read as ~0.9996.
+        a = mine.jacobians[l].to(torch.float64)
+        b = theirs.jacobians[l].to(torch.float64).to(a.device)
         per_layer.append({
             "layer": l,
             "rel_error": ((a - b).norm() / b.norm()).item(),
@@ -257,7 +261,7 @@ def identity_distance(lens) -> float:
     import torch
 
     layer = max(lens.jacobians)          # last source layer = the one adjacent to target
-    J = lens.jacobians[layer].float()
+    J = lens.jacobians[layer].to(torch.float64)   # float32 differs in the 4th digit here
     I = torch.eye(J.shape[-1], device=J.device, dtype=J.dtype)
     return ((J - I).norm() / I.norm()).item()
 
