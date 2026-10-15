@@ -107,6 +107,20 @@ def test_recovery_rejects_an_empty_checkpoint():
         artifacts.recover_from_checkpoint(_fake_checkpoint(n_done=0))
 
 
+def test_lens_files_skip_jpp_and_oracle_siblings():
+    # Neuronpedia added <np_id>/jpp/ (8 Oct 2026) and <np_id>/oracle/ next to jlens/.
+    from jlens_lab import artifacts
+    files = ["qwen3-4b/jpp/Salesforce-wikitext/Qwen3-4B_jpp_lens.pt",
+             "qwen3-4b/jpp/Salesforce-wikitext/config.yaml",
+             "qwen3-4b/oracle/LICENSE",
+             "qwen3-4b/jlens/Salesforce-wikitext/config.yaml",
+             "qwen3-4b/jlens/Salesforce-wikitext/Qwen3-4B_jacobian_lens.pt",
+             "qwen3-4b-it/jlens/Salesforce-wikitext/Qwen3-4B-it_jacobian_lens.pt"]
+    got = artifacts._lens_files(files, "qwen3-4b")
+    assert got == ["qwen3-4b/jlens/Salesforce-wikitext/Qwen3-4B_jacobian_lens.pt",
+                   "qwen3-4b/jlens/Salesforce-wikitext/config.yaml"]
+
+
 def test_claimed_prompts_parsed_from_config():
     from jlens_lab import artifacts
     assert artifacts._claimed_prompts("results:\n  prompts_fitted: 615\n") == 615

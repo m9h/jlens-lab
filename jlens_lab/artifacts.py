@@ -118,6 +118,18 @@ def load_lens(path: str, *, allow_checkpoint: bool = True, warn=print):
         return lens
 
 
+def _lens_files(files, np_id: str, subdir: str = SUBDIR) -> list[str]:
+    """Only the J-lens files for ``np_id`` -- never its J++ siblings.
+
+    Since 8 Oct 2026 the repo also carries J++ lenses (Ayonrinde & Lindsey 2026) under
+    ``<np_id>/jpp/<dataset>/`` in a different .pt format (fp16 maps, ``provenance``), and
+    an ``oracle/`` folder for some models. A bare ``np_id/`` prefix match returned all of
+    them in listing order, so ``pts[0]`` was a coin toss between a J-lens and a J++ lens.
+    """
+    prefix = f"{np_id}/{subdir}/"
+    return sorted(f for f in files if f.startswith(prefix))
+
+
 def _claimed_prompts(config_text: str) -> int | None:
     m = re.search(r"prompts_fitted:\s*(\d+)", config_text)
     return int(m.group(1)) if m else None
@@ -129,7 +141,7 @@ def verify(np_id: str, *, repo: str = REPO, subdir: str = SUBDIR) -> Report:
     import pathlib
 
     api = HfApi()
-    files = [f for f in api.list_repo_files(repo) if f.startswith(np_id + "/")]
+    files = _lens_files(api.list_repo_files(repo), np_id, subdir)
     pts = [f for f in files if f.endswith(".pt")]
     cfgs = [f for f in files if f.endswith("config.yaml")]
 
@@ -174,7 +186,7 @@ def audit(np_ids=None, *, repo: str = REPO, verbose: bool = True) -> list[Report
 
     if np_ids is None:
         files = HfApi().list_repo_files(repo)
-        np_ids = sorted({f.split("/")[0] for f in files if "/" in f})
+        np_ids = sorted({f.split("/")[0] for f in files if f"/{SUBDIR}/" in f})
 
     reports = []
     for np_id in np_ids:
@@ -272,7 +284,7 @@ def published_targets(np_id: str, *, repo: str = REPO, subdir: str = SUBDIR) -> 
     import re
     from huggingface_hub import HfApi, hf_hub_download
 
-    files = [f for f in HfApi().list_repo_files(repo) if f.startswith(np_id + "/")]
+    files = _lens_files(HfApi().list_repo_files(repo), np_id, subdir)
     cfgs = [f for f in files if f.endswith("config.yaml")]
     if not cfgs:
         return {}
@@ -302,7 +314,7 @@ def validate_fit(mine, np_id: str, *, threshold: float = 0.95,
     """
     from huggingface_hub import HfApi, hf_hub_download
 
-    files = [f for f in HfApi().list_repo_files(repo) if f.startswith(np_id + "/")]
+    files = _lens_files(HfApi().list_repo_files(repo), np_id, subdir)
     pts = [f for f in files if f.endswith(".pt")]
     if not pts:
         raise FileNotFoundError(f"no published .pt for {np_id}")
