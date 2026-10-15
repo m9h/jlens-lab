@@ -311,6 +311,15 @@ def validate_fit(mine, np_id: str, *, threshold: float = 0.95,
 
     Returns the comparison plus ``pass``. Below ``threshold`` mean cosine, your pipeline
     disagrees with the reference and every lens you fit with it is suspect.
+
+    Blind spot, measured 2026-10-15 (jacobian-lens ``results/ROPE_ERRATUM.md``, retraction):
+    the identity-distance check (``id_tol`` = 5%) cannot tell a wrong-RoPE forward from a fit
+    on a different prompt set of the same model. On OLMo-3-7B the RoPE bug shifts the
+    layer-30 identity distance by ~4-5% and so does prompt sampling (opposite sign in our
+    case); our July 2026 gate passed against a buggy reference *because* the two cancelled.
+    To detect a forward-pass error with this gate, fit on the reference's exact prompts --
+    or compare a single shared prompt's per-prompt Jacobian, which matches to 0.1% when
+    the forwards agree.
     """
     from huggingface_hub import HfApi, hf_hub_download
 
